@@ -50,6 +50,7 @@ def init_database():
             """
             CREATE TABLE IF NOT EXISTS users (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
                 email TEXT NOT NULL UNIQUE,
                 password_hash TEXT NOT NULL,
                 created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
@@ -72,6 +73,14 @@ def init_database():
             );
             """
         )
+        # CREATE TABLE IF NOT EXISTS does not update databases created earlier.
+        columns = {
+            row["name"] for row in connection.execute("PRAGMA table_info(users)")
+        }
+        if "name" not in columns:
+            connection.execute(
+                "ALTER TABLE users ADD COLUMN name TEXT NOT NULL DEFAULT ''"
+            )
 
 
 def wants_json_response():
@@ -154,7 +163,7 @@ def login():
 
     with get_db_connection() as connection:
         user = connection.execute(
-            "SELECT id, email, password_hash FROM users WHERE email = ?", (email,)
+            "SELECT id, name, email, password_hash FROM users WHERE email = ?", (email,)
         ).fetchone()
 
     if user is None or not check_password_hash(user["password_hash"], password):
@@ -166,6 +175,7 @@ def login():
     session.clear()
     session["user_id"] = user["id"]
     session["user_email"] = user["email"]
+    session["user_name"] = user["name"]
 
     if wants_json_response():
         return jsonify({"message": "Giriş başarılı", "email": user["email"]})
@@ -180,10 +190,13 @@ def signup():
         return render_template("Signup.html")
 
     data = request_data()
+    name = str(data.get("name") or "").strip()
     email = normalize_email(data.get("email") or data.get("username"))
     password = str(data.get("password") or "")
 
-    if "@" not in email or len(email) > 254:
+    if not name or len(name) > 100:
+        error = "Adınız 1 ila 100 karakter arasında olmalıdır"
+    elif "@" not in email or len(email) > 254:
         error = "Geçerli bir e-posta adresi girin"
     elif len(password) < 8:
         error = "Şifre en az 8 karakter olmalıdır"
@@ -198,8 +211,8 @@ def signup():
     try:
         with get_db_connection() as connection:
             cursor = connection.execute(
-                "INSERT INTO users (email, password_hash) VALUES (?, ?)",
-                (email, generate_password_hash(password)),
+                "INSERT INTO users (name, email, password_hash) VALUES (?, ?, ?)",
+                (name, email, generate_password_hash(password)),
             )
             user_id = cursor.lastrowid
     except sqlite3.IntegrityError:
@@ -211,6 +224,7 @@ def signup():
     session.clear()
     session["user_id"] = user_id
     session["user_email"] = email
+    session["user_name"] = name
 
     if wants_json_response():
         return jsonify({"message": "Hesap oluşturuldu", "email": email}), 201
@@ -226,8 +240,24 @@ def logout():
 @app.route("/dashboard")
 @login_required
 def dashboard():
-    return render_template("dashboard.html", user_email=session["user_email"])
+    with get_db_connection() as connection:
+        user = connection.execute(
+            "SELECT name, email FROM users WHERE id = ?",
+            (session["user_id"],),
+        ).fetchone()
+    if user is None:
+        session.clear()
+        return redirect(url_for("login"))
 
+    print("ÇALIŞAN DOSYA:", __file__)
+    print("DASHBOARD ADI:", user["name"])
+    print("DASHBOARD E-POSTA:", user["email"])
+
+    return render_template(
+        "dashboard.html",
+        user_name=user["name"],
+        user_email=user["email"],
+)
 
 @app.route("/search", methods=["POST"])
 @login_required
